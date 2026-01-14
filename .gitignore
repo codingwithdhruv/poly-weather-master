@@ -1,0 +1,84 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# =========================
+# Virtual Environments
+# =========================
+venv/
+.env/
+.env.*
+.python-version
+
+# =========================
+# OS / Editor
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+
+# =========================
+# Runtime State / Bot Data
+# =========================
+bot_state.json
+state.json
+*.state
+
+# =========================
+# Secrets / Keys
+# =========================
+*.key
+*.pem
+*.secret
+private_key.txt
+
+# =========================
+# Web3 / Cache
+# =========================
+.cache/
+node_modules/
+.wallet/
+.keystore/
+
+# =========================
+# Async / Temp Files
+# =========================
+*.tmp
+*.bak
+*.old
+
+# =========================
+# Testing Artifacts
+# =========================
+tests/__pycache__/
+coverage.xml
+test-results/
+
+# =========================
+# Misc
+# =========================
+*.sqlite
+*.db
