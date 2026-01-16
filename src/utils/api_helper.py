@@ -32,6 +32,11 @@ async def fetch_market_data(condition_id: str):
                 # Debug: Log what we actually got
                 if isinstance(data, list) and len(data) > 0:
                     m = data[0]
+                    # SAFETY CHECK: API can return default/stale data if filter fails
+                    if m.get('condition_id', '').lower() != condition_id.lower():
+                        warning(f"Market Mismatch! Requested {condition_id}, got {m.get('condition_id')} ({m.get('question')[:30]}...)")
+                        return None
+                        
                     # Log snippet of market data to verify it matches trade
                     debug(f"Market Found {condition_id}: {m.get('category')} - {m.get('question')[:40]}...")
                     return m
