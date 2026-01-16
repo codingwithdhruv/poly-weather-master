@@ -107,3 +107,29 @@ async def fetch_recent_trades(address: str, limit: int = 5):
     except Exception as e:
         error(f"Error fetching activity: {e}")
         return []
+
+async def fetch_market_by_token(token_id: str):
+    """Fetch market data using token ID instead of condition ID"""
+    try:
+        url = "https://gamma-api.polymarket.com/markets"
+        params = {"clob_token_ids": token_id}
+        
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        connector = aiohttp.TCPConnector(ssl=ssl_context)
+        
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                if response.status != 200:
+                    warning(f"Gamma API error {response.status} for token {token_id}")
+                    return None
+                
+                data = await response.json()
+                if isinstance(data, list) and len(data) > 0:
+                    # Verify we got a valid market
+                    return data[0]
+                
+                warning(f"No market found for token {token_id}")
+                return None
+    except Exception as e:
+        error(f"Failed to fetch market by token: {e}")
+        return None

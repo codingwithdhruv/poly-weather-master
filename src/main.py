@@ -6,7 +6,7 @@ from .strategy import Strategy
 from .monitor import TradeMonitor
 from .utils.logger import header, info, warning, error, success
 from .utils.create_clob_client import create_clob_client
-from .utils.api_helper import fetch_market_data, get_trader_portfolio_value, fetch_recent_trades
+from .utils.api_helper import fetch_market_data, get_trader_portfolio_value, fetch_recent_trades, fetch_market_by_token
 from .clients.relay import RelayClient
 from py_clob_client.clob_types import OrderArgs, OrderType
 from py_clob_client.order_builder.constants import BUY, SELL
@@ -19,8 +19,8 @@ async def main():
         # Resolve Trader EOA -> Proxy for RTDS Monitoring
         from .utils.resolve_proxy import resolve_to_proxy
         target_proxy = resolve_to_proxy(Config.TRADER_ADDRESS)
-        # We track the proxy if resolved, otherwise fallback to EOA but monitoring might be spotty without Polling fix
-        Config.TRADER_ADDRESS = target_proxy # Update config to track the correct address
+        # We track the proxy if resolved, otherwise fallback to EOA
+        Config.TRADER_ADDRESS = target_proxy 
         info(f"Configuration validated. Tracking: {Config.TRADER_ADDRESS}")
     except Exception as e:
         error(f"Configuration error: {e}")
@@ -41,7 +41,7 @@ async def main():
     trade_queue = asyncio.Queue()
     monitor = TradeMonitor(trade_queue)
     
-    # Create CLOB Client (uses Relay logic internally for proxy detection now)
+    # Create CLOB Client
     clob_client = await create_clob_client()
     
     if not account_manager.check_daily_guardrails():
@@ -62,7 +62,6 @@ async def main():
             side = trade.get('side', '?')
             timestamp = trade.get('timestamp', 0)
             
-            # Convert timestamp to readable format
             from datetime import datetime
             time_str = datetime.fromtimestamp(int(timestamp)).strftime('%Y-%m-%d %H:%M') if timestamp else 'Unknown'
             
@@ -84,24 +83,24 @@ async def main():
             trade_data = await trade_queue.get()
             
             try:
-                # 1. Fetch Real Market Data
-                market_id = trade_data.get('conditionId')
-                if not market_id:
-                     warning("Trade missing conditionId")
-                     continue
-                     
                 # 0️⃣ Pre-Filter: Use Trade Data Title (Skip Gamma API for non-weather)
                 title_lower = trade_data.get('title', '').lower()
                 if 'london' not in title_lower or 'temperature' not in title_lower:
-                    # Log infrequently or just debug to avoid spam
                     info(f"Skipping non-weather trade: {trade_data.get('title', 'Unknown')[:50]}")
                     continue
 
-                # 1. Fetch Real Market Data (Only if Pre-Filter passes)
-                market_data = await fetch_market_data(market_id)
+                # 1. Fetch Real Market Data via Asset (Token) ID
+                # Use Token ID (asset) which is reliable, unlike conditionId from Activity API
+                token_id = trade_data.get('asset')
+                market_data = await fetch_market_by_token(token_id)
+                
                 if not market_data:
-                    warning(f"Could not fetch market data for {market_id}")
+                    warning(f"Could not fetch market data for token {token_id}")
                     continue
+                
+                # Update market_id from the authoritative Gamma response
+                market_id = market_data.get('condition_id')
+
                 
                 # Debug logging for filter
                 info(f"Trade received: {trade_data.get('outcome')} on market {market_id}")
