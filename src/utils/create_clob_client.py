@@ -56,13 +56,14 @@ async def create_clob_client() -> ClobClient:
 
     # 2. Init Full Client
     # Signature Type: 0 (EOA), 1 (Poly Proxy?), 2 (Gnosis Safe)
+    # Important: If it's a proxy, we MUST use signature_type=2 for Gnosis Safe
     sig_type = 2 if is_proxy_safe else 0
     
     client = ClobClient(
         host=host,
         key=private_key,
         chain_id=chain_id,
-        creds=creds,
+        creds=creds, # Pass derived credentials
         signature_type=sig_type,
         funder=proxy_address if is_proxy_safe else None
     )

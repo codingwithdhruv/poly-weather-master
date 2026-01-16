@@ -1,4 +1,5 @@
 import requests
+import aiohttp
 import time
 from ..config import Config
 from .logger import error, info
@@ -11,13 +12,14 @@ async def fetch_market_data(condition_id: str):
     """Fetch real market data from Gamma API"""
     try:
         url = f"{GAMMA_API_URL}?condition_id={condition_id}"
-        response = requests.get(url, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-        
-        if isinstance(data, list) and len(data) > 0:
-            return data[0] # Gamma returns a list
-        return None
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                response.raise_for_status()
+                data = await response.json()
+                
+                if isinstance(data, list) and len(data) > 0:
+                    return data[0] # Gamma returns a list
+                return None
     except Exception as e:
         error(f"Failed to fetch market data for {condition_id}: {e}")
         return None

@@ -90,4 +90,13 @@ def error(message: str) -> None:
     print(f'{Fore.RED}[ERROR]{Style.RESET_ALL} {message}', file=sys.stderr)
     write_to_file(f'ERROR: {message}')
 
-__all__ = ['header', 'info', 'success', 'warning', 'error', 'trade_detect']
+
+def debug(message: str) -> None:
+    """Print debug message"""
+    if USE_COLORS:
+        print(f'{Fore.CYAN}[DEBUG]{Style.RESET_ALL} {message}')
+    else:
+        print(f'[DEBUG] {message}')
+    write_to_file(f'DEBUG: {message}')
+
+__all__ = ['header', 'info', 'success', 'warning', 'error', 'trade_detect', 'debug']

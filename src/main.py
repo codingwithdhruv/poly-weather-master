@@ -18,7 +18,9 @@ async def main():
         Config.validate()
         # Resolve Trader EOA -> Proxy for RTDS Monitoring
         from .utils.resolve_proxy import resolve_to_proxy
-        Config.TRADER_ADDRESS = resolve_to_proxy(Config.TRADER_ADDRESS)
+        target_proxy = resolve_to_proxy(Config.TRADER_ADDRESS)
+        # We track the proxy if resolved, otherwise fallback to EOA but monitoring might be spotty without Polling fix
+        Config.TRADER_ADDRESS = target_proxy # Update config to track the correct address
         info(f"Configuration validated. Tracking: {Config.TRADER_ADDRESS}")
     except Exception as e:
         error(f"Configuration error: {e}")
@@ -70,6 +72,10 @@ async def main():
                     warning(f"Could not fetch market data for {market_id}")
                     continue
                 
+                # Debug logging for filter
+                info(f"Trade received: {trade_data.get('outcome')} on market {market_id}")
+                info(f"Market category: {market_data.get('category')}, question: {market_data.get('question')[:50]}")
+
                 # 2. Market Filter
                 if not Strategy.is_valid_market(market_data):
                     info(f"Skipping trade: Invalid market category/question")
@@ -92,7 +98,14 @@ async def main():
                 
                 trader_alloc = trade_size_usd / max(1, account_manager.trader_portfolio_value)
                 
-                classification = Strategy.classify_trade(trade_data, market_data, trader_alloc)
+                classification, reason = Strategy.classify_trade(trade_data, market_data, trader_alloc)
+                
+                if classification:
+                    info(f"Trade CLASSIFIED as {classification}: {reason}")
+                else:
+                    info(f"Trade SKIPPED: {reason}")
+                    trade_queue.task_done()
+                    continue
                 
                 from .utils.get_my_balance import get_my_balance
                 current_balance = get_my_balance(Config.PROXY_WALLET_ADDRESS)
@@ -108,49 +121,94 @@ async def main():
                 account_manager.update_balance(current_balance)
                 
                 if classification == "CERTAINTY":
-                    size = account_manager.get_bet_size_certainty(current_balance, opportunities_remaining=3)
+                    # For Certainty Mode B, we are now extremely cautious
+                    # Max size is HARD CAPPED at MAX_SINGLE_TRADE_RATIO (0.25%)
+                    # We treat it same as max inventory drip
+                    
+                    max_drip = current_balance * Config.MAX_SINGLE_TRADE_RATIO
+                    size = max_drip # Always just drip, never go big
+                    
                     if size > 0:
-                        success(f"EXECUTING CERTAINTY BET: ${size:.2f} on {trade_data['outcome']}")
+                        success(f"EXECUTING CERTAINTY BET (CAPPED): ${size:.2f} on {trade_data['outcome']}")
                         try:
-                            # Execute Order
+                            price = float(trade_data.get('price', 0.50))
+                            shares_size = size / price
+                            
                             order_args = OrderArgs(
-                                price=0.99 if trade_data.get('side') == 'BUY' else 0.01, # Example limit price
-                                size=size / 0.50, # Rough Estimate of shares, need price. 
-                                # Actually, size is USD. Shares = Size / Price.
+                                price=price,
+                                size=shares_size, 
                                 side=BUY if trade_data.get('side') == 'BUY' else SELL,
-                                token_id=trade_data.get('asset') # asset/token_id
+                                token_id=trade_data.get('asset')
                             )
-                            # Note: Actual price logic needs to be robust (e.g. market price + slippage)
-                            # For now leaving as placeholder but with correct types
-                            # signed_order = clob_client.create_order(order_args)
-                            # resp = clob_client.post_order(signed_order, OrderType.GTC)
-                            # success(f"Order Placed: {resp}")
-                            account_manager.record_exposure(size)
+                            
+                            tick_size = market_data.get("minimum_tick_size", "0.01")
+                            neg_risk = market_data.get("neg_risk", False)
+
+                            signed_order = clob_client.create_order(
+                                order_args, 
+                                options={"tick_size": str(tick_size), "neg_risk": neg_risk}
+                            )
+                            
+                            if not account_manager.check_market_cap(market_id, size, current_balance):
+                                warning(f"Skipping Certainty Bet: Market Cap hit for {market_id}")
+                                trade_queue.task_done()
+                                continue
+
+                            resp = clob_client.post_order(signed_order, OrderType.GTC)
+                            success(f"Order Placed (Certainty Capped): {resp}")
+                            account_manager.record_exposure(size, market_id)
                         except Exception as e:
                             error(f"Order Execution Failed: {e}")
 
-                    else:
-                        warning("Skipping Certainty Bet: Insufficient Pool or Cap hit")
-
-                elif classification == "NORMAL_CANDIDATE":
-                    # Add to accumulator
-                    is_cluster, bucket_count, exposure = account_manager.accumulator.add_trade(
-                        market_id, 
-                        trade_data, 
-                        account_manager.trader_portfolio_value
-                    )
+                elif classification == "INVENTORY":
+                    # INVENTORY MODE (Mode A) implementation
+                    # No accumulator wait - immediate execution
+                    # Size capped at 0.25% of OUR portfolio
                     
-                    if is_cluster:
-                        # Use ACTUAL bucket_count for sizing
-                        size = account_manager.get_bet_size_normal(current_balance, bucket_count=bucket_count)
-                        if size > 0:
-                            success(f"EXECUTING NORMAL BET (Cluster Confirmed - Expose {exposure:.2f}): ${size:.2f} on {trade_data['outcome']}")
-                            # await clob_client.create_order(...)
-                        else:
-                            warning("Skipping Normal Bet: Insufficient Pool or Cap hit")
+                    max_drip = current_balance * Config.MAX_SINGLE_TRADE_RATIO
+                    # Optionally scale down if pool is low, but usually just fixed drip
+                    size = max_drip
+                    
+                    if size > 0:
+                        success(f"EXECUTING INVENTORY BET: ${size:.2f} on {trade_data['outcome']}")
+                        try:
+                            # Use Limit order at trade price
+                            price = float(trade_data.get('price', 0.50))
+                            shares_size = size / price
+                            
+                            order_args = OrderArgs(
+                                price=price,
+                                size=shares_size, # Shares
+                                side=BUY if trade_data.get('side') == 'BUY' else SELL,
+                                token_id=trade_data.get('asset')
+                            )
+                            
+                            tick_size = market_data.get("minimum_tick_size", "0.01")
+                            neg_risk = market_data.get("neg_risk", False)
+
+                            signed_order = clob_client.create_order(
+                                order_args,
+                                options={"tick_size": str(tick_size), "neg_risk": neg_risk}
+                            )
+                            
+                            if not account_manager.check_market_cap(market_id, size, current_balance):
+                                warning(f"Skipping Inventory Bet: Market Cap hit for {market_id}")
+                                trade_queue.task_done()
+                                continue
+
+                            resp = clob_client.post_order(signed_order, OrderType.GTC)
+                            success(f"Order Placed (Inventory): {resp}")
+                            
+                            # Add to accumulator just for tracking/logging if relevant later, 
+                            # but we don't block on it.
+                            # We can also track exposure here.
+                            account_manager.record_exposure(size, market_id)
+                            
+                        except Exception as e:
+                            error(f"Inventory Order Failed: {e}")
                     else:
-                        info(f"Buffered Normal Candidate: Waiting for Cluster/Exposure... (Current Exp: ${exposure:.2f})")
-                        
+                        warning("Skipping Inventory Bet: Size near zero")
+
             except Exception as e:
                 error(f"Error processing trade: {e}")
             finally:

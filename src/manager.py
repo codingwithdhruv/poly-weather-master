@@ -8,7 +8,12 @@ from .utils.logger import info
 STATE_FILE = "bot_state.json"
 
 class MarketAccumulator:
-    """Buffers trades to detect clusters (Normal Bets)"""
+    """
+    [LEGACY / UNUSED] 
+    Buffers trades to detect clusters. 
+    Not used in current INVENTORY MIRRORING strategy (Mode A is immediate).
+    Retained for potential reversion to cluster-based logic.
+    """
     def __init__(self):
         self.buffers = {} # market_id -> list of trades
         
@@ -68,7 +73,8 @@ class AccountManager:
             "pools": {
                 "certainty": 0,
                 "normal": 0
-            }
+            },
+            "market_exposures": {} # market_id -> float (usd exposure)
         }
         
     def _save_state(self):
@@ -107,9 +113,28 @@ class AccountManager:
             return False
         return True
 
-    def record_exposure(self, amount: float):
+    def record_exposure(self, amount: float, market_id: str = None):
         self.state["current_exposure"] += amount
+        
+        if market_id:
+            if "market_exposures" not in self.state:
+                self.state["market_exposures"] = {}
+            
+            curr = self.state["market_exposures"].get(market_id, 0.0)
+            self.state["market_exposures"][market_id] = curr + amount
+            
         self._save_state()
+
+    def check_market_cap(self, market_id: str, proposed_amount: float, total_balance: float) -> bool:
+        if "market_exposures" not in self.state:
+             self.state["market_exposures"] = {}
+             
+        current_market_exp = self.state["market_exposures"].get(market_id, 0.0)
+        max_market_exp = total_balance * Config.MAX_SINGLE_MARKET_RATIO
+        
+        if (current_market_exp + proposed_amount) > max_market_exp:
+            return False
+        return True
         
     def get_bet_size_certainty(self, total_balance: float, opportunities_remaining: int) -> float:
         max_bet = total_balance * Config.CERTAINTY_MAX_PER_BET_RATIO

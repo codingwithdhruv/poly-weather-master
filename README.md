@@ -1,20 +1,39 @@
 # Poly Weather Master Bot
 
-A specialized trading bot designed to monitor a target trader on Polymarket and execute copy trades based on specific strategies and risk management rules.
+A specialized trading bot designed to mirror the inventory accumulation strategy of a specific Polymarket whale, specifically targeting "London Weather" markets.
 
-## Features
+## Strategy Overview: "Inventory Mirroring"
 
-- **Real-time Monitoring**: Tracks a specific target trader's activity via WebSocket.
-- **Automated Copy Trading**: Automatically executes trades when the target trader's activity matches defined criteria ("Certainty" or "Normal" bets).
-- **Risk Management**: Includes daily loss limits and exposure caps to protect your portfolio.
-- **Proxy Resolution**: Automatically resolves the target trader's Externally Owned Account (EOA) to their Proxy Wallet address for accurate tracking.
-- **Gasless Operations**: potentially utilizes relay clients for efficient transaction management.
+The bot implements a sophisticated **Inventory Mirroring** strategy (`src/strategy.py`) rather than simple copy trading. It identifies two distinct modes of operation from the target trader:
+
+### 1. Mode A: Inventory Building (The "Bread & Butter")
+*   **Goal**: Mirror the target's accumulation of contracts in the 5¢ - 85¢ range.
+*   **Trigger**: Any trade by the target < 5% of their portfolio size and within the price range.
+*   **Resolution**: **Immediate Execution**. We do not wait for clusters. We "drip" buy alongside them.
+*   **Sizing**: Strictly capped at **0.25%** of *your* bot's portfolio per trade.
+*   **Allocation**: 90% of your capital is reserved for this mode.
+
+### 2. Mode B: Certainty Bets (Risk Mitigation)
+*   **Trigger**: Extreme conviction trades (Price > 95¢ or < 5¢ **AND** Size > 10% of target portfolio).
+*   **Execution**: **Safety Cap Enabled**. We execute these but *strictly capped* at the same 0.25% small size.
+*   **Why**: To avoid "following the whale off a cliff" on their high-risk/private-info bets while still maintaining exposure.
+
+## Key Features
+
+- **Robust Polling**: Uses `aiohttp` to poll the Polymarket Data API every 3 seconds, querying both `maker` and `taker` history to capture 100% of activity.
+- **Timestamp Filtering**: Efficiently queries only new trades using the `after` timestamp parameter.
+- **Smart Filtering**:
+    - **London Weather Only**: Validates category, city, and resolution source ("london city airport").
+    - **Dead Zone Avoidance**: Skips late-stage trades between 85¢-95¢ where convexity is poor.
+- **Risk Management**:
+    - **Per-Market Cap**: Hard limit of **3%** portfolio exposure per single market to prevent over-accumulation.
+    - **Flip Protection**: minimal 3-minute window to filter noise vs legitimate inventory management.
+    - **Daily Guardrails**: loss limits and exposure caps.
 
 ## Prerequisites
 
-- **Python 3.10+**: Ensure you have a compatible version of Python installed.
-- **pip**: Python package installer.
-- **Polygon Wallet**: A funded wallet on the Polygon network (for gas and trading capital).
+- **Python 3.10+**
+- **Polygon Wallet**: Funded with `USDC.e` (Bridged USDC) and `POL` (Matic) for gas.
 
 ## Installation
 
@@ -24,51 +43,70 @@ A specialized trading bot designed to monitor a target trader on Polymarket and 
     cd poly-weather-master
     ```
 
-2.  **Set Up a Virtual Environment (Recommended)**
+2.  **Install System Deps (Linux/Mac)**
     ```bash
-    python3 -m venv venv
-    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    # Mac
+    brew install python3
+    
+    # Linux
+    sudo apt update && sudo apt install -y python3-venv python3-pip
     ```
 
-3.  **Install Dependencies**
+3.  **Set Up Virtual Environment**
     ```bash
+    python3 -m venv venv
+    source venv/bin/activate
+    ```
+
+4.  **Install Dependencies**
+    ```bash
+    pip install --upgrade pip
     pip install -r requirements.txt
     ```
 
 ## Configuration
 
-1.  **Create Environment File**
-    Copy the example environment file to create your local interface configuration.
+1.  **Create `.env`**
     ```bash
     cp .env.example .env
     ```
 
 2.  **Edit `.env`**
-    Open `.env` in your text editor and fill in the required details:
-
-    *   `PRIVATE_KEY`: Your wallet's private key (without the `0x` prefix). **Keep this secret!**
-    *   `RPC_URL`: A reliable Polygon RPC URL (e.g., `https://polygon-rpc.com`).
-    *   `TRADER_ADDRESS`: The wallet address of the trader you want to track (EOA). The bot will automatically resolve this to their proxy address.
-    *   `PROXY_WALLET_ADDRESS`: (Optional) Your own proxy wallet address if you are using one.
-    *   `MAX_DAILY_LOSS`: Maximum percentage of daily loss allowed before halting (e.g., `15`).
-    *   `MAX_DAILY_NEW_EXPOSURE`: Maximum percentage of portfolio allowed for new positions daily (e.g., `25`).
+    *   `PRIVATE_KEY`: Your wallet private key.
+    *   `RPC_URL`: Polygon RPC (e.g., `https://polygon-rpc.com`).
+    *   `TRADER_ADDRESS`: Target whale address.
+    *   `PROXY_WALLET_ADDRESS`: Your Gnosis Safe / Proxy address (if using Relayer).
 
 ## Usage
 
-To start the bot, run the following command from the root directory of the project:
-
+Run the bot:
 ```bash
 python3 -m src.main
 ```
 
-## Structure
+### Understanding Logs
 
-- **src/main.py**: The entry point of the application. Handles initialization and the main event loop.
-- **src/config.py**: Manages configuration and environment variables.
-- **src/monitor.py**: Handles WebSocket connections and monitors the target trader.
-- **src/strategy.py**: Contains logic for classifying trades and market validation.
-- **src/manager.py**: Manages account balance, exposure, and risk checks.
+The bot provides verbose logging to explain every decision:
+*   `[DETECTED] New Trade`: Poller found a trade.
+*   `Trade CLASSIFIED as INVENTORY`: Matches criteria, will execute.
+*   `Trade SKIPPED`: Log explains why (e.g., `Alloc 10.5% > 5% limit`, `Price 98.00 not in Inventory range`).
+*   `EXECUTING INVENTORY BET`: Order placed.
+
+## Deployment (Supervisor)
+
+For 24/7 operation on a VPS:
+
+```ini
+[program:poly-weather-master]
+command=/path/to/venv/bin/python -m src.main
+directory=/path/to/poly-weather-master
+autostart=true
+autorestart=true
+stderr_logfile=/path/to/logs/err.log
+stdout_logfile=/path/to/logs/out.log
+environment=PYTHONUNBUFFERED="1"
+```
 
 ## Disclaimer
 
-This software is for educational purposes only. Trading cryptocurrencies and prediction markets involves significant risk. The authors are not responsible for any financial losses incurred while using this bot.
+This software is for educational purposes only. Prediction markets carry significant risk. Use at your own discretion.

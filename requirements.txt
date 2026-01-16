@@ -5,3 +5,5 @@ websockets>=12.0
 # For potential async operations if needed later, though simple bot might just be sync loop first
 # Keeping it minimal as requested
 py-clob-client
+aiohttp>=3.9.0
+certifi>=2023.7.22
