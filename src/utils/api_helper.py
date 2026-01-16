@@ -125,8 +125,23 @@ async def fetch_market_by_token(token_id: str):
                 
                 data = await response.json()
                 if isinstance(data, list) and len(data) > 0:
-                    # Verify we got a valid market
-                    return data[0]
+                    # We found the market via Token ID.
+                    # However, this endpoint might return a "thin" object without category.
+                    # To be safe, we now fetch the FULL data using the trusted condition_id.
+                    m = data[0]
+                    trusted_condition_id = m.get('conditionId') # Note: Gamma sometimes uses conditionId vs condition_id
+                    
+                    if not trusted_condition_id:
+                        trusted_condition_id = m.get('condition_id')
+                        
+                    if trusted_condition_id:
+                        # Chain to get full data
+                        full_market = await fetch_market_data(trusted_condition_id)
+                        if full_market:
+                            return full_market
+                            
+                    # Fallback to returning what we have if full fetch fails
+                    return m
                 
                 warning(f"No market found for token {token_id}")
                 return None
