@@ -6,7 +6,7 @@ from .strategy import Strategy
 from .monitor import TradeMonitor
 from .utils.logger import header, info, warning, error, success
 from .utils.create_clob_client import create_clob_client
-from .utils.api_helper import fetch_market_data, get_trader_portfolio_value
+from .utils.api_helper import fetch_market_data, get_trader_portfolio_value, fetch_recent_trades
 from .clients.relay import RelayClient
 from py_clob_client.clob_types import OrderArgs, OrderType
 from py_clob_client.order_builder.constants import BUY, SELL
@@ -48,6 +48,29 @@ async def main():
         error(f"Daily guardrails triggered. Halting trading.")
         return
 
+    # Log last 5 trades from target
+    info("Fetching last 5 trades from target address...")
+    recent_trades = await fetch_recent_trades(Config.TRADER_ADDRESS, limit=5)
+
+    if recent_trades:
+        header("RECENT TARGET ACTIVITY (Last 5 Trades)")
+        for i, trade in enumerate(recent_trades, 1):
+            title = trade.get('title', 'Unknown')[:40]
+            outcome = trade.get('outcome', '?')
+            price = float(trade.get('price', 0))
+            size = float(trade.get('size', 0))
+            side = trade.get('side', '?')
+            timestamp = trade.get('timestamp', 0)
+            
+            # Convert timestamp to readable format
+            from datetime import datetime
+            time_str = datetime.fromtimestamp(int(timestamp)).strftime('%Y-%m-%d %H:%M') if timestamp else 'Unknown'
+            
+            info(f"#{i} [{time_str}] {side} {outcome} @ ${price:.2f} | Size: {size:.2f} | {title}...")
+    else:
+        warning("No recent trades found for target address")
+    info("-" * 50)
+
     monitor_task = asyncio.create_task(monitor.start())
     info("State: WAITING FOR TRADES...")
     
@@ -67,6 +90,14 @@ async def main():
                      warning("Trade missing conditionId")
                      continue
                      
+                # 0️⃣ Pre-Filter: Use Trade Data Title (Skip Gamma API for non-weather)
+                title_lower = trade_data.get('title', '').lower()
+                if 'london' not in title_lower or 'temperature' not in title_lower:
+                    # Log infrequently or just debug to avoid spam
+                    info(f"Skipping non-weather trade: {trade_data.get('title', 'Unknown')[:50]}")
+                    continue
+
+                # 1. Fetch Real Market Data (Only if Pre-Filter passes)
                 market_data = await fetch_market_data(market_id)
                 if not market_data:
                     warning(f"Could not fetch market data for {market_id}")
